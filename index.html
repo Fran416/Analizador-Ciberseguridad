@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Top 10 Palabras AST - Ciberseguridad</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        body {
+            background-color: #1a1a1a; /* Fondo gris muy oscuro, descansa la vista */
+            color: #e0e0e0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            height: 100vh;
+        }
+        h2 { margin-top: 20px; color: #378ae4; }
+        
+        /* Estilos de las barras */
+        .bar {
+            fill: #4CAF50; /* Color verde ciberseguridad */
+            transition: fill 0.3s;
+        }
+        .bar:hover {
+            fill: #81C784; /* Brillo al pasar el mouse */
+        }
+
+        /* Estilos de los textos y ejes */
+        .label {
+            fill: white;
+            font-size: 14px;
+            text-anchor: end;
+        }
+        .value-label {
+            fill: #a0a0a0;
+            font-size: 12px;
+        }
+        .axis path, .axis line {
+            stroke: #444; /* Color de las líneas de los ejes */
+        }
+        .axis text {
+            fill: #a0a0a0;
+            font-size: 12px;
+        }
+        
+        #grafico-container {
+            width: 80%;
+            height: 80%;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+
+    <h2>📊 Top 10 Palabras más usadas en el AST</h2>
+    <div id="grafico-container">
+        <svg id="canvas" width="100%" height="100%"></svg>
+    </div>
+
+    <script>// 1. CONFIGURACIÓN ESTÁTICA (Se hace una sola vez)
+const container = document.getElementById('grafico-container');
+const margin = {top: 20, right: 30, bottom: 40, left: 100};
+let conteoPalabras = {};
+
+// Crear el SVG y el grupo principal una sola vez
+const svg = d3.select("#canvas")
+    .attr("viewBox", `0 0 ${container.clientWidth} ${container.clientHeight}`);
+
+const g = svg.append("g")
+    .attr("transform", `translate(${margin.left},${margin.top})`);
+
+// Crear grupos para los ejes para que no se dupliquen
+const xAxisG = g.append("g").attr("class", "axis x-axis");
+const yAxisG = g.append("g").attr("class", "axis y-axis");
+
+// 2. FUNCIÓN DE ACTUALIZACIÓN (La que llama el WebSocket)
+function actualizarGrafico(nuevasPalabras) {
+    // A. Actualizar datos
+    nuevasPalabras.forEach(palabra => {
+        conteoPalabras[palabra] = (conteoPalabras[palabra] || 0) + 1;
+    });
+
+    let datosTop10 = Object.entries(conteoPalabras)
+        .map(([word, count]) => ({ word, count }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 10);
+
+    if (datosTop10.length === 0) return;
+
+    const width = container.clientWidth - margin.left - margin.right;
+    const height = container.clientHeight - margin.top - margin.bottom;
+
+    // B. Actualizar Escalas
+    const x = d3.scaleLinear()
+        .domain([0, d3.max(datosTop10, d => d.count)])
+        .range([0, width]);
+
+    const y = d3.scaleBand()
+        .domain(datosTop10.map(d => d.word))
+        .range([0, height])
+        .padding(0.2);
+
+    // C. Actualizar Ejes con transición
+    yAxisG.transition().duration(0).call(d3.axisLeft(y).tickSize(0));
+    xAxisG.attr("transform", `translate(0,${height})`)
+        .transition().duration(0)
+        .call(d3.axisBottom(x).ticks(5).tickFormat(d3.format("d")));
+
+    // D. PATRÓN JOIN: Las Barras
+    const barras = g.selectAll(".bar")
+        .data(datosTop10, d => d.word); // La clave es d.word para que D3 sepa qué barra es cuál
+
+    barras.exit().remove(); // Quitar palabras que salieron del Top 10
+
+    barras.enter()
+        .append("rect")
+        .attr("class", "bar")
+        .attr("x", 0)
+        .attr("y", d => y(d.word))
+        .attr("height", y.bandwidth())
+        .attr("width", 0) // Empiezan en 0
+        .merge(barras) // Mezclar nuevas con existentes
+        .transition().duration(0) // Animación suave
+        .attr("y", d => y(d.word)) // Se mueven si cambia el ranking
+        .attr("width", d => x(d.count))
+        .attr("height", y.bandwidth());
+
+    // E. PATRÓN JOIN: Etiquetas de valor
+    const etiquetas = g.selectAll(".value-label")
+        .data(datosTop10, d => d.word);
+
+    etiquetas.exit().remove();
+
+    etiquetas.enter()
+        .append("text")
+        .attr("class", "value-label")
+        .merge(etiquetas)
+        .transition().duration(500)
+        .attr("y", d => y(d.word) + y.bandwidth() / 2 + 4)
+        .attr("x", d => x(d.count) + 5)
+        .text(d => d.count);
+}
+function conectar() {
+    const socket = new WebSocket("ws://127.0.0.1:8080");
+
+    socket.onopen = () => {
+        console.log("✅ Conectado al Miner");
+        // Cambiamos el título para saber que todo está OK
+        document.querySelector("h2").innerText = "📊 Analizando Repositorios...";
+        document.querySelector("h2").style.color = "#4CAF50";
+    };
+
+    socket.onmessage = function(event) {
+        const datos = JSON.parse(event.data);
+        actualizarGrafico(datos);
+    };
+
+    socket.onclose = () => {
+        console.log("⚠️ Conexión perdida. Reintentando en 3 segundos...");
+        
+        // Feedback visual: Ponemos el título en naranja para avisar que esperamos datos
+        document.querySelector("h2").innerText = "⏳ Esperando al Miner (Reconectando...)";
+        document.querySelector("h2").style.color = "#ffa500";
+
+        // 2. LA MAGIA: Espera 3 segundos y se llama a sí misma para reintentar
+        setTimeout(() => {
+            conectar();
+        }, 3000);
+    };
+
+    socket.onerror = (error) => {
+        // No dejamos que el error mate el script, solo cerramos el socket
+        // para que 'onclose' se encargue de reintentar.
+        socket.close();
+    };
+}
+
+// Lanzamos la primera conexión apenas cargue la página
+conectar();
+    </script>
+</body>
+</html>
